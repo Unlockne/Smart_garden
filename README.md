@@ -2,6 +2,8 @@
 
 Repo này là **skeleton chạy được** theo nội dung `plan_week1_md` (Week 1: foundation & project skeleton).
 
+Repo hiện đã được cập nhật để phục vụ **Week 2 (data pipeline + DB + history)** theo `plan/plan_week2.md`.
+
 ## Yêu cầu
 
 - Windows 10/11
@@ -28,7 +30,15 @@ Copy file env mẫu:
 copy backend\.env.example backend\.env
 ```
 
-> Week 1 skeleton **chạy được không cần PostgreSQL** (đang trả mock data). Khi sang Week 2 bạn chỉ cần nối DB theo các biến trong `.env`.
+Backend Week 2 có 2 chế độ:
+
+- **Không cần PostgreSQL**: mặc định dùng SQLite file `smart_garden.db` (tự tạo) để demo history nhanh.
+- **Dùng PostgreSQL**: set `DATABASE_URL` hoặc set `POSTGRES_*` trong `backend/.env`.
+
+Adafruit IO polling (tuỳ chọn):
+
+- set `ENABLE_ADAFRUIT_POLLING=true`
+- set `ADAFRUIT_IO_USERNAME`, `ADAFRUIT_IO_KEY`, `ADAFRUIT_FEED_KEY`
 
 ### 3) Run server
 
@@ -68,12 +78,25 @@ Mở:
 
 - `http://localhost:5173`
 
-## API có sẵn (Week 1)
+## API có sẵn (Week 2)
 
 - `GET /health`
 - `GET /api/v1/sensors/latest`
+- `GET /api/v1/sensors/history?limit=20`
 - `GET /api/v1/devices/state`
 - `POST /api/v1/devices/control`
+- `GET /api/v1/system/status`
+- `POST /api/v1/internal/mock-ingest`
+
+### Mock ingest để test nhanh (khi chưa có Adafruit IO)
+
+Gửi 1 record mẫu vào DB:
+
+```powershell
+curl -X POST http://127.0.0.1:8000/api/v1/internal/mock-ingest `
+  -H "Content-Type: application/json" `
+  -d '{"air_temperature":29.8,"air_humidity":70.2,"soil_moisture":35.0,"light_level":380.0,"device_id":"mock-device"}'
+```
 
 ## Cấu trúc thư mục
 

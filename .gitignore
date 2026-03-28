@@ -1,4 +1,3 @@
-plan/
 # Environment / secrets
 .env
 .env.*
@@ -17,6 +16,9 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+
+# # Local DB
+# *.db
 
 # Virtual environments
 .venv/

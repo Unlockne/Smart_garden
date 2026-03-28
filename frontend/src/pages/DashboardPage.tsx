@@ -14,20 +14,31 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000
 
 export default function DashboardPage() {
   const [data, setData] = useState<SensorLatest | null>(null)
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let alive = true
-    axios
-      .get<SensorLatest>(`${API_BASE_URL}/sensors/latest`)
-      .then((res) => {
-        if (alive) setData(res.data)
-      })
-      .catch(() => {
-        if (alive) setData(null)
-      })
+
+    const fetchLatest = async () => {
+      try {
+        const res = await axios.get<SensorLatest>(`${API_BASE_URL}/sensors/latest`)
+        if (!alive) return
+        setData(res.data)
+        setLastUpdated(new Date().toLocaleString())
+        setError(null)
+      } catch {
+        if (!alive) return
+        setError('Cannot fetch latest sensor data')
+      }
+    }
+
+    void fetchLatest()
+    const t = window.setInterval(() => void fetchLatest(), 5000)
 
     return () => {
       alive = false
+      window.clearInterval(t)
     }
   }, [])
 
@@ -35,6 +46,10 @@ export default function DashboardPage() {
     <Box>
       <Typography variant="h5" sx={{ mb: 2 }}>
         Dashboard
+      </Typography>
+
+      <Typography variant="body2" color={error ? 'error' : 'text.secondary'} sx={{ mb: 2 }}>
+        {error ? error : `Updated at: ${lastUpdated ?? '--'}`}
       </Typography>
 
       <Grid container spacing={2}>
