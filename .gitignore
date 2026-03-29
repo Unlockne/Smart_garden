@@ -17,8 +17,9 @@ dist/
 build/
 *.egg-info/
 
-# # Local DB
-# *.db
+# Local DB
+*.db
+backend/app/data.db
 
 # Virtual environments
 .venv/

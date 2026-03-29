@@ -1,8 +1,8 @@
-# Smart Garden – Week 1 Starter Kit
+# Smart Garden – Week 3
 
 Repo này là **skeleton chạy được** theo nội dung `plan_week1_md` (Week 1: foundation & project skeleton).
 
-Repo hiện đã được cập nhật để phục vụ **Week 2 (data pipeline + DB + history)** theo `plan/plan_week2.md`.
+Repo hiện đã được cập nhật để phục vụ **Week 3 (manual control + auto mode + logs)** theo `plan/plan_week3.md`.
 
 ## Yêu cầu
 
@@ -39,6 +39,11 @@ Adafruit IO polling (tuỳ chọn):
 
 - set `ENABLE_ADAFRUIT_POLLING=true`
 - set `ADAFRUIT_IO_USERNAME`, `ADAFRUIT_IO_KEY`, `ADAFRUIT_FEED_KEY`
+
+Adafruit IO command feed (Week 3):
+
+- backend sẽ publish command xuống feed `ADAFRUIT_COMMAND_FEED_KEY` (mặc định `smart-garden-commands`)
+- firmware cần subscribe feed này để điều khiển relay
 
 ### 3) Run server
 
@@ -78,15 +83,18 @@ Mở:
 
 - `http://localhost:5173`
 
-## API có sẵn (Week 2)
+## API có sẵn (Week 3)
 
 - `GET /health`
 - `GET /api/v1/sensors/latest`
 - `GET /api/v1/sensors/history?limit=20`
 - `GET /api/v1/devices/state`
 - `POST /api/v1/devices/control`
+- `POST /api/v1/system/mode`
 - `GET /api/v1/system/status`
 - `POST /api/v1/internal/mock-ingest`
+- `GET /api/v1/logs/control`
+- `GET /api/v1/logs/system-decisions`
 
 ### Mock ingest để test nhanh (khi chưa có Adafruit IO)
 

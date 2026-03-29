@@ -40,7 +40,11 @@ def ingest_payload(db: Session, payload: SensorIngestRequest, source: str) -> Se
     return row
 
 
+_last_adafruit_id = None
+
 def poll_latest_from_adafruit() -> SensorIngestRequest | None:
+    global _last_adafruit_id
+    
     if not settings.adafruit_io_username or not settings.adafruit_io_key:
         return None
 
@@ -49,9 +53,15 @@ def poll_latest_from_adafruit() -> SensorIngestRequest | None:
         f"/feeds/{settings.adafruit_feed_key}/data/last"
     )
 
-    r = requests.get(url, headers={"X-AIO-Key": settings.adafruit_io_key}, timeout=10)
+    r = requests.get(url, headers={"X-AIO-Key": settings.adafruit_io_key}, timeout=2)
     r.raise_for_status()
     data = r.json()
+
+    current_id = data.get("id")
+    if current_id == _last_adafruit_id:
+        return None
+        
+    _last_adafruit_id = current_id
 
     value = data.get("value")
     if not isinstance(value, str):

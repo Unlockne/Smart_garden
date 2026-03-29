@@ -50,7 +50,7 @@ export default function HistoryPage() {
     }
 
     void fetchHistory()
-    const t = window.setInterval(() => void fetchHistory(), 15000)
+    const t = window.setInterval(() => void fetchHistory(), 2000)
 
     return () => {
       alive = false

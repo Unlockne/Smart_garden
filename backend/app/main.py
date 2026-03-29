@@ -1,8 +1,7 @@
 from datetime import datetime, timezone
-from typing import Literal
-
-from fastapi import FastAPI
+ 
 from fastapi import Depends
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -10,25 +9,24 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import Base, engine, get_db
+from app.models.control_log import ControlLog
+from app.models.device_state import DeviceState
 from app.models.sensor_reading import SensorReading
+from app.models.system_decision_log import SystemDecisionLog
+from app.schemas.devices import (
+    DeviceControlRequest,
+    DeviceControlResponse,
+    DeviceStateResponse,
+    SystemModeRequest,
+    SystemModeResponse,
+)
 from app.schemas.sensors import SensorIngestRequest, SensorLatestResponse, SystemStatusResponse
+from app.services.adafruit_command_service import build_command, publish_command
+from app.services.auto_mode_service import run_auto_if_needed
+from app.services.device_state_service import get_latest_state, upsert_state
 from app.services.ingestion_service import ingest_payload
+from app.services.logging_service import create_control_log
 from app.services.poller import poller
-
-
-class DeviceStateResponse(BaseModel):
-    recorded_at: datetime
-    pump_state: bool
-    fan_state: bool
-    light_state: bool
-    mode: Literal["manual", "auto", "ai"]
-
-
-class DeviceControlRequest(BaseModel):
-    target_device: Literal["pump", "fan", "light"]
-    action: Literal["on", "off"]
-    actor_type: Literal["user", "system", "ai"] = "user"
-    reason: str = "manual control from dashboard"
 
 
 app = FastAPI(title="Smart Garden API", version="0.1.0")
@@ -45,6 +43,13 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup():
     Base.metadata.create_all(bind=engine)
+    # Ensure there's an initial device state row
+    db = next(get_db())
+    try:
+        if get_latest_state(db) is None:
+            upsert_state(db, mode="manual")
+    finally:
+        db.close()
     poller.start()
 
 
@@ -132,6 +137,7 @@ def system_status(db: Session = Depends(get_db)):
 @app.post("/api/v1/internal/mock-ingest")
 def internal_mock_ingest(req: SensorIngestRequest, db: Session = Depends(get_db)):
     row = ingest_payload(db, req, source="mock")
+    run_auto_if_needed(db, trigger="mock-ingest")
     return {
         "status": "inserted",
         "id": row.id,
@@ -140,24 +146,119 @@ def internal_mock_ingest(req: SensorIngestRequest, db: Session = Depends(get_db)
 
 
 @app.get("/api/v1/devices/state", response_model=DeviceStateResponse)
-def get_device_state():
-    now = datetime.now(timezone.utc)
+def get_device_state(db: Session = Depends(get_db)):
+    state = get_latest_state(db)
+    if state is None:
+        state = upsert_state(db, mode="manual")
+
     return DeviceStateResponse(
-        recorded_at=now,
-        pump_state=False,
-        fan_state=False,
-        light_state=True,
-        mode="manual",
+        recorded_at=state.recorded_at,
+        pump_state=state.pump_state,
+        fan_state=state.fan_state,
+        light_state=state.light_state,
+        mode=state.mode,
     )
 
 
-@app.post("/api/v1/devices/control")
-def control_device(req: DeviceControlRequest):
-    return {
-        "status": "accepted",
-        "target_device": req.target_device,
-        "action": req.action,
-        "actor_type": req.actor_type,
-        "reason": req.reason,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
+@app.post("/api/v1/system/mode", response_model=SystemModeResponse)
+def set_system_mode(req: SystemModeRequest, db: Session = Depends(get_db)):
+    upsert_state(db, mode=req.mode)
+    return SystemModeResponse(success=True, mode=req.mode)
+
+
+@app.post("/api/v1/devices/control", response_model=DeviceControlResponse)
+def control_device(req: DeviceControlRequest, db: Session = Depends(get_db)):
+    state = get_latest_state(db)
+    current_mode = state.mode if state else "manual"
+    if current_mode == "auto" and req.actor_type == "user":
+        log = create_control_log(
+            db,
+            target_device=req.target_device,
+            action=req.action,
+            actor_type=req.actor_type,
+            reason=req.reason,
+            status="failed",
+            note="manual control is disabled in auto mode",
+        )
+        return DeviceControlResponse(success=False, message="Manual control is disabled in auto mode", command_id=str(log.id))
+
+    cmd = build_command(
+        target_device=req.target_device,
+        action=req.action,
+        mode=current_mode,
+        requested_by=req.actor_type,
+        reason=req.reason,
+    )
+
+    try:
+        publish_command(cmd)
+        status = "success"
+        note = None
+        message = "Command sent successfully"
+        ok = True
+    except Exception as e:
+        status = "failed"
+        note = str(e)
+        message = f"Failed to send command: {e}"
+        ok = False
+
+    log = create_control_log(
+        db,
+        target_device=req.target_device,
+        action=req.action,
+        actor_type=req.actor_type,
+        reason=req.reason,
+        status=status,
+        note=note,
+    )
+
+    # Assume success for Week 3 demo; update state even if publish failed only when ok
+    if ok:
+        if req.target_device == "pump":
+            upsert_state(db, pump_state=(req.action == "on"))
+        elif req.target_device == "fan":
+            upsert_state(db, fan_state=(req.action == "on"))
+        elif req.target_device == "light":
+            upsert_state(db, light_state=(req.action == "on"))
+
+    return DeviceControlResponse(success=ok, message=message, command_id=str(log.id))
+
+
+@app.get("/api/v1/logs/control")
+def get_control_logs(limit: int = 10, db: Session = Depends(get_db)):
+    limit = max(1, min(200, limit))
+    rows = db.query(ControlLog).order_by(ControlLog.created_at.desc()).limit(limit).all()
+    return [
+        {
+            "id": r.id,
+            "created_at": r.created_at,
+            "target_device": r.target_device,
+            "action": r.action,
+            "actor_type": r.actor_type,
+            "reason": r.reason,
+            "status": r.status,
+            "note": r.note,
+        }
+        for r in rows
+    ]
+
+
+@app.get("/api/v1/logs/system-decisions")
+def get_system_decision_logs(limit: int = 10, db: Session = Depends(get_db)):
+    limit = max(1, min(200, limit))
+    rows = (
+        db.query(SystemDecisionLog).order_by(SystemDecisionLog.created_at.desc()).limit(limit).all()
+    )
+    return [
+        {
+            "id": r.id,
+            "created_at": r.created_at,
+            "mode": r.mode,
+            "trigger_type": r.trigger_type,
+            "sensor_snapshot": r.sensor_snapshot,
+            "recommended_action": r.recommended_action,
+            "executed": r.executed,
+            "execution_note": r.execution_note,
+        }
+        for r in rows
+    ]
