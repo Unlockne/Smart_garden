@@ -1,18 +1,8 @@
-# Smart Garden – Week 1 Starter Kit
+# Smart Garden – Week 3
 
 Repo này là **skeleton chạy được** theo nội dung `plan_week1_md` (Week 1: foundation & project skeleton).
 
-## Week 2 – Lấy data thật (Adafruit IO MQTT -> Backend -> Web)
-
-Week 2 backend sẽ:
-
-- **Subscribe MQTT** các feed sensor trên Adafruit IO
-- Khi có message, backend **lưu vào SQLite** (`backend/app/data.db`)
-- Frontend đọc:
-  - `GET /api/v1/sensors/latest`
-  - `GET /api/v1/sensors/history?limit=50`
-
-Yêu cầu: bạn có **Adafruit IO Username + Key** và đã tạo các feeds.
+Repo hiện đã được cập nhật để phục vụ **Week 3 (manual control + auto mode + logs)** theo `plan/plan_week3.md`.
 
 ## Yêu cầu
 
@@ -32,8 +22,6 @@ python -m venv .venv
 pip install -r backend\requirements.txt
 ```
 
-> Nếu bạn đã cài dependencies từ Week 1, Week 2 có thêm package MQTT nên vẫn chạy lại lệnh `pip install -r backend\requirements.txt` để cập nhật.
-
 ### 2) (Tuỳ chọn) cấu hình env
 
 Copy file env mẫu:
@@ -42,29 +30,20 @@ Copy file env mẫu:
 copy backend\.env.example backend\.env
 ```
 
-Mở `backend/.env` và điền tối thiểu:
+Backend Week 2 có 2 chế độ:
 
-```env
-ADAFRUIT_IO_USERNAME=...
-ADAFRUIT_IO_KEY=...
-```
+- **Không cần PostgreSQL**: mặc định dùng SQLite file `smart_garden.db` (tự tạo) để demo history nhanh.
+- **Dùng PostgreSQL**: set `DATABASE_URL` hoặc set `POSTGRES_*` trong `backend/.env`.
 
-Và đảm bảo bạn đã tạo các feed trùng tên (mặc định):
+Adafruit IO polling (tuỳ chọn):
 
-- `air-temperature`
-- `air-humidity`
-- `soil-moisture`
-- `light-level`
+- set `ENABLE_ADAFRUIT_POLLING=true`
+- set `ADAFRUIT_IO_USERNAME`, `ADAFRUIT_IO_KEY`, `ADAFRUIT_FEED_KEY`
 
-Control feeds (để web bấm bật/tắt gửi xuống thiết bị) mặc định:
+Adafruit IO command feed (Week 3):
 
-- `pump-control`
-- `fan-control`
-- `light-control`
-
-> Week 1 skeleton **chạy được không cần PostgreSQL** (đang trả mock data). Khi sang Week 2 bạn chỉ cần nối DB theo các biến trong `.env`.
-
-> Week 2 hiện tại backend dùng **SQLite** để chạy local nhanh. File DB nằm ở `backend/app/data.db`.
+- backend sẽ publish command xuống feed `ADAFRUIT_COMMAND_FEED_KEY` (mặc định `smart-garden-commands`)
+- firmware cần subscribe feed này để điều khiển relay
 
 ### 3) Run server
 
@@ -76,19 +55,6 @@ Mở:
 
 - `http://127.0.0.1:8000/health`
 - Swagger: `http://127.0.0.1:8000/docs`
-
-### 4) Verify data lên được backend
-
-1) Mở Adafruit IO Dashboard, thử **publish số** vào feed (ví dụ `soil-moisture` = `55`).
-
-> Lưu ý: backend đang parse payload thành `float`, nên payload nên là **số** (vd: `55`, `30.2`).
-
-2) Gọi thử API:
-
-- `http://127.0.0.1:8000/api/v1/sensors/latest`
-- `http://127.0.0.1:8000/api/v1/sensors/history?limit=50`
-
-Nếu đã nhận được dữ liệu mới, bạn sẽ thấy `recorded_at` update và history có thêm dòng.
 
 ## Chạy Frontend (React + Vite + TS)
 
@@ -117,18 +83,28 @@ Mở:
 
 - `http://localhost:5173`
 
-### Verify data lên web
-
-- Vào page `Dashboard` để xem `latest`
-- Vào page `History` để xem bảng + chart
-
-## API có sẵn (Week 1)
+## API có sẵn (Week 3)
 
 - `GET /health`
 - `GET /api/v1/sensors/latest`
-- `GET /api/v1/sensors/history`
+- `GET /api/v1/sensors/history?limit=20`
 - `GET /api/v1/devices/state`
 - `POST /api/v1/devices/control`
+- `POST /api/v1/system/mode`
+- `GET /api/v1/system/status`
+- `POST /api/v1/internal/mock-ingest`
+- `GET /api/v1/logs/control`
+- `GET /api/v1/logs/system-decisions`
+
+### Mock ingest để test nhanh (khi chưa có Adafruit IO)
+
+Gửi 1 record mẫu vào DB:
+
+```powershell
+curl -X POST http://127.0.0.1:8000/api/v1/internal/mock-ingest `
+  -H "Content-Type: application/json" `
+  -d '{"air_temperature":29.8,"air_humidity":70.2,"soil_moisture":35.0,"light_level":380.0,"device_id":"mock-device"}'
+```
 
 ## Cấu trúc thư mục
 
