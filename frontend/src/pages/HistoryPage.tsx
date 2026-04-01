@@ -65,6 +65,7 @@ export default function HistoryPage() {
         time: new Date(r.recorded_at).toLocaleTimeString(),
         air_temperature: r.air_temperature,
         soil_moisture: r.soil_moisture,
+        light_level: r.light_level,
       }))
   }, [rows])
 
@@ -95,8 +96,9 @@ export default function HistoryPage() {
                     <XAxis dataKey="time" hide />
                     <YAxis />
                     <Tooltip />
-                    <Line type="monotone" dataKey="air_temperature" stroke="#1976d2" dot={false} />
-                    <Line type="monotone" dataKey="soil_moisture" stroke="#2e7d32" dot={false} />
+                    <Line type="monotone" dataKey="air_temperature" stroke="#1976d2" dot={false} name="Nhiệt độ" />
+                    <Line type="monotone" dataKey="soil_moisture" stroke="#2e7d32" dot={false} name="Độ ẩm đất" />
+                    <Line type="monotone" dataKey="light_level" stroke="#ed6c02" dot={false} name="Ánh sáng" />
                   </LineChart>
                 </ResponsiveContainer>
               </Box>
