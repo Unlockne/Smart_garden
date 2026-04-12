@@ -1,0 +1,23 @@
+{
+  "index_to_name": {
+    "0": "FloweringPlant",
+    "1": "LeafyPlant",
+    "2": "Succulents"
+  },
+  "name_to_group": {
+    "Succulents": "succulent",
+    "FloweringPlant": "flowering",
+    "LeafyPlant": "leafy_ornamental"
+  },
+  "class_names": [
+    "FloweringPlant",
+    "LeafyPlant",
+    "Succulents"
+  ],
+  "num_classes": 3,
+  "input_size": [
+    224,
+    224
+  ],
+  "description": "3-class plant classifier for Smart Garden MVP."
+}
