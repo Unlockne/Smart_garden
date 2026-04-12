@@ -83,6 +83,33 @@ Mở:
 
 - `http://localhost:5173`
 
+## AI / ML (nhận diện cây bằng ảnh)
+
+Backend load `ml/models/plant_classifier.keras` + `labels.json` (lazy, lần đầu gọi inference). Cần cài đủ `backend/requirements.txt` (có TensorFlow; lần đầu `pip install` có thể lâu).
+
+**Biến môi trường (tuỳ chọn):** `ENABLE_ML_INFERENCE`, `ML_MODEL_PATH`, `ML_LABELS_PATH` — xem `backend/.env.example`.
+
+**Endpoint:**
+
+- `POST /api/v1/ai/classify` — JSON, gợi ý text (`hint`), không cần ảnh (fallback).
+- `POST /api/v1/ai/classify/image` — `multipart/form-data`: field `file` (ảnh), tuỳ chọn `device_id` (form).
+- `POST /api/v1/plants/recognize` — multipart ảnh, trả `{ "success", "data" }` như `ml/BACKEND.md`.
+- `GET /health` — thêm object `ml` (enabled / ready / model_path).
+
+**Test nhanh (PowerShell, server đang chạy cổng 8000):**
+
+```powershell
+# Classify có ảnh (đổi đường dẫn tới file jpg/png thật)
+curl.exe -X POST "http://127.0.0.1:8000/api/v1/ai/classify/image" `
+  -F "file=@C:\path\to\plant.jpg"
+
+# Định dạng doc ML
+curl.exe -X POST "http://127.0.0.1:8000/api/v1/plants/recognize" `
+  -F "file=@C:\path\to\plant.jpg"
+```
+
+**Kết quả mong đợi:** `method: "keras"` (hoặc `plants/recognize`: `success: true`), `predicted_plant` là một trong `FloweringPlant` / `LeafyPlant` / `Succulents`, `plant_key` map sang profile seed: `fern` / `basil` / `aloe`. Xem log tại `GET /api/v1/ai/decisions`.
+
 ## API có sẵn (Week 3)
 
 - `GET /health`
