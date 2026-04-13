@@ -1,4 +1,5 @@
 fastapi==0.115.6
+python-multipart>=0.0.9
 uvicorn[standard]==0.30.6
 pydantic==2.9.2
 pydantic-settings==2.6.1
@@ -6,3 +7,8 @@ python-dotenv==1.0.1
 SQLAlchemy==2.0.36
 psycopg2-binary==2.9.9
 requests==2.32.3
+
+# ML inference (plant_classifier.keras)
+tensorflow>=2.15.0
+numpy>=1.24.0
+Pillow>=10.0.0
