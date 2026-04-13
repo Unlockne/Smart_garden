@@ -63,7 +63,7 @@ export default function ControlPage() {
   const [error, setError] = useState<string | null>(null)
   const [info, setInfo] = useState<string | null>(null)
 
-  const manualDisabled = useMemo(() => state?.mode === 'auto', [state?.mode])
+  const manualDisabled = useMemo(() => state?.mode !== 'manual', [state?.mode])
 
   useEffect(() => {
     let alive = true
@@ -163,8 +163,8 @@ export default function ControlPage() {
                 <Button disabled={busy} variant={state?.mode === 'auto' ? 'contained' : 'outlined'} onClick={() => void onModeSwitch('auto')}>
                   Auto
                 </Button>
-                <Button disabled variant={state?.mode === 'ai' ? 'contained' : 'outlined'}>
-                  AI (coming soon)
+                <Button disabled={busy} variant={state?.mode === 'ai' ? 'contained' : 'outlined'} onClick={() => void onModeSwitch('ai')}>
+                  AI
                 </Button>
               </Stack>
 
@@ -176,7 +176,7 @@ export default function ControlPage() {
 
               {manualDisabled ? (
                 <Alert severity="warning" sx={{ mb: 2 }}>
-                  Manual control is disabled while Auto mode is enabled.
+                  Manual control is available only in Manual mode.
                 </Alert>
               ) : null}
 
