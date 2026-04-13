@@ -1,13 +1,4 @@
-from pathlib import Path
-
 from pydantic_settings import BaseSettings
-
-
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parent.parent.parent.parent
-
-
-_REPO = _repo_root()
 
 
 class Settings(BaseSettings):
@@ -39,11 +30,6 @@ class Settings(BaseSettings):
     auto_temp_off: float = 30
     auto_light_on: float = 20
     auto_light_off: float = 40
-
-    # ML (Keras) — đường dẫn mặc định tới ml/models trong repo
-    enable_ml_inference: bool = True
-    ml_model_path: str = str(_REPO / "ml" / "models" / "plant_classifier.keras")
-    ml_labels_path: str = str(_REPO / "ml" / "models" / "labels.json")
 
     class Config:
         env_file = "backend/.env"
