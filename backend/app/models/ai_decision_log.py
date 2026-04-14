@@ -26,5 +26,6 @@ class AIDecisionLog(Base):
 
     @staticmethod
     def json_to_text(obj: dict) -> str:
-        return json.dumps(obj, ensure_ascii=False)
+        # Support datetime and other non-JSON-native values in logs.
+        return json.dumps(obj, ensure_ascii=False, default=str)
 
