@@ -306,6 +306,7 @@ def ai_classify(req: AIClassifyRequest, db: Session = Depends(get_db)):
         "display_name": display_name,
         "confidence": confidence,
         "method": "fallback",
+        "message": "Please use /api/v1/ai/classify/image for model inference.",
         "candidates": candidates,
         "predicted_class": None,
         "plant_group": None,
