@@ -23,14 +23,22 @@ class AIClassifyResponse(BaseModel):
     display_name: str
     confidence: float = Field(ge=0.0, le=1.0)
     method: Literal["fallback", "keras"] = "fallback"
+    message: str | None = None
     candidates: list[PlantCandidate] = []
-    predicted_class: str | None = None  # tên lớp từ model (labels.json)
+    predicted_class: str | None = None  # class name from labels.json
     plant_group: str | None = None  # ví dụ succulent, flowering
     all_probabilities: dict[str, float] | None = None
 
 
 class PlantProfileResponse(BaseModel):
     plant_key: str
+    display_name: str
+    profile: dict
+
+
+class PlantProfileUpsertRequest(BaseModel):
+    """Create or replace plant profile (client can edit thresholds)."""
+
     display_name: str
     profile: dict
 
@@ -76,4 +84,3 @@ class AIApplyResponse(BaseModel):
     success: bool
     message: str
     command_ids: list[str] = []
-

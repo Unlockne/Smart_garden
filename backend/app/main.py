@@ -22,11 +22,9 @@ from app.models.plant_profile import PlantProfile
 from app.schemas.ai import (
     AIApplyRequest,
     AIApplyResponse,
-    AIClassifyRequest,
     AIClassifyResponse,
-    AIRecommendRequest,
+    AIRecommendRequest, 
     AIRecommendResponse,
-    PlantProfileResponse,
     SensorSnapshot,
 )
 from app.schemas.devices import (
@@ -39,7 +37,6 @@ from app.schemas.devices import (
 from app.schemas.sensors import SensorIngestRequest, SensorLatestResponse, SystemStatusResponse
 from app.services.adafruit_command_service import build_command, publish_command
 from app.services.ai_service import (
-    classify_fallback,
     classify_from_image_bytes,
     create_ai_log,
     ensure_ai_seed,
@@ -51,6 +48,7 @@ from app.services.ai_service import (
 )
 from app.services.plant_classifier_service import ml_runtime_status
 from app.services.auto_mode_service import run_auto_if_needed
+from app.services.ai_mode_service import run_ai_if_needed
 from app.services.device_state_service import get_latest_state, upsert_state
 from app.services.ingestion_service import ingest_payload
 from app.services.logging_service import create_control_log
@@ -172,6 +170,7 @@ def system_status(db: Session = Depends(get_db)):
 def internal_mock_ingest(req: SensorIngestRequest, db: Session = Depends(get_db)):
     row = ingest_payload(db, req, source="mock")
     run_auto_if_needed(db, trigger="mock-ingest")
+    run_ai_if_needed(db, trigger="mock-ingest")
     return {
         "status": "inserted",
         "id": row.id,
@@ -298,30 +297,6 @@ def get_system_decision_logs(limit: int = 10, db: Session = Depends(get_db)):
     ]
 
 
-@app.post("/api/v1/ai/classify", response_model=AIClassifyResponse)
-def ai_classify(req: AIClassifyRequest, db: Session = Depends(get_db)):
-    plant_key, display_name, confidence, candidates = classify_fallback(db, hint=req.hint)
-    out = {
-        "plant_key": plant_key,
-        "display_name": display_name,
-        "confidence": confidence,
-        "method": "fallback",
-        "candidates": candidates,
-        "predicted_class": None,
-        "plant_group": None,
-        "all_probabilities": None,
-    }
-    create_ai_log(
-        db,
-        device_id=req.device_id,
-        step="classify",
-        input_obj=req.model_dump(),
-        output_obj=out,
-        safety_passed=True,
-    )
-    return AIClassifyResponse(**out)
-
-
 @app.post("/api/v1/ai/classify/image", response_model=AIClassifyResponse)
 async def ai_classify_image(
     file: UploadFile = File(...),
@@ -356,63 +331,32 @@ async def ai_classify_image(
     return AIClassifyResponse(**out)
 
 
-@app.post("/api/v1/plants/recognize")
-async def plants_recognize(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    """Tương thích ml/BACKEND.md: multipart ảnh, trả { success, data | error }."""
-    name = (file.filename or "").lower()
-    if not name.endswith((".png", ".jpg", ".jpeg", ".webp")):
-        return {"success": False, "error": "Định dạng file không được hỗ trợ"}
-    image_bytes = await file.read()
-    if not image_bytes:
-        return {"success": False, "error": "File ảnh rỗng"}
-
-    try:
-        out = classify_from_image_bytes(db, image_bytes=image_bytes, device_id=None)
-    except Exception as e:
-        return {"success": False, "error": str(e)}
-
-    data = {
-        "predicted_plant": out["predicted_class"],
-        "plant_group": out["plant_group"],
-        "confidence": out["confidence"],
-        "all_probabilities": out["all_probabilities"],
-        "plant_key": out["plant_key"],
-        "display_name": out["display_name"],
-    }
-    create_ai_log(
-        db,
-        device_id=None,
-        step="classify",
-        input_obj={"filename": file.filename, "endpoint": "plants/recognize"},
-        output_obj=data,
-        safety_passed=True,
-    )
-    return {"success": True, "data": data}
-
-
-@app.get("/api/v1/ai/profile/{plant_key}", response_model=PlantProfileResponse)
-def ai_profile(plant_key: str, db: Session = Depends(get_db)):
-    ensure_ai_seed(db)
-    row = get_profile(db, plant_key=plant_key)
-    if row is None:
-        return PlantProfileResponse(plant_key=plant_key, display_name="Unknown", profile={})
-
-    profile = parse_profile_json(row)
-    out = {"plant_key": row.plant_key, "display_name": row.display_name, "profile": profile}
-    create_ai_log(
-        db,
-        device_id=None,
-        step="profile",
-        input_obj={"plant_key": plant_key},
-        output_obj=out,
-        safety_passed=True,
-    )
-    return PlantProfileResponse(**out)
-
-
 @app.post("/api/v1/ai/recommend", response_model=AIRecommendResponse)
 def ai_recommend(req: AIRecommendRequest, db: Session = Depends(get_db)):
     ensure_ai_seed(db)
+    state = get_latest_state(db)
+    current_mode = state.mode if state else "manual"
+    if current_mode != "ai":
+        row = get_profile(db, plant_key=req.plant_key)
+        out = {
+            "plant_key": req.plant_key,
+            "display_name": row.display_name if row else "Unknown",
+            "sensor_used": SensorSnapshot().model_dump(),
+            "actions": [],
+            "safety_passed": False,
+            "safety_reason": "AI recommend requires system mode=ai",
+        }
+        create_ai_log(
+            db,
+            device_id=req.device_id,
+            step="recommend",
+            input_obj=req.model_dump(),
+            output_obj=out,
+            safety_passed=False,
+            safety_reason="not in ai mode",
+        )
+        return AIRecommendResponse(**out)
+
     row = get_profile(db, plant_key=req.plant_key)
     if row is None:
         out = {

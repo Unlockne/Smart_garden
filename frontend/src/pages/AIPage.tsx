@@ -34,8 +34,10 @@ type SensorSnapshot = {
 type DeviceState = { mode: Mode }
 
 type ClassifyResponse = {
-  predicted_plant: string
-  plant_group: string
+  plant_key: string
+  display_name: string
+  predicted_class: string | null
+  plant_group: string | null
   confidence: number
 }
 
@@ -56,6 +58,28 @@ type RecommendResponse = {
   explanation: string
   safety_checked: boolean
   allowed_to_execute: boolean
+}
+
+type RecommendApiResponse = {
+  plant_key: string
+  display_name: string
+  actions: Array<{
+    target_device: string
+    action: string
+    reason: string
+  }>
+  safety_passed: boolean
+  safety_reason: string | null
+}
+
+type AIDecisionApiRow = {
+  id: number | string
+  created_at: string
+  step: string
+  output_json: string
+  safety_passed: boolean
+  safety_reason: string | null
+  execution_note: string | null
 }
 
 type DecisionRow = {
@@ -117,6 +141,84 @@ function recommendFallback(profile: PlantProfile, sensor: SensorSnapshot): Recom
   }
 }
 
+function mapRecommendToUi(payload: RecommendApiResponse): RecommendResponse {
+  if (payload.actions.length === 0) {
+    return {
+      recommendation: `${payload.display_name} is currently in a safe range.`,
+      action_suggested: 'none',
+      explanation: payload.safety_reason ?? 'No action suggested by AI.',
+      safety_checked: true,
+      allowed_to_execute: payload.safety_passed,
+    }
+  }
+
+  const actionList = payload.actions.map((a) => `${a.target_device}_${a.action}`).join(', ')
+  const reasonList = payload.actions.map((a) => `- ${a.reason}`).join('\n')
+  return {
+    recommendation: `${payload.display_name}: AI suggested ${payload.actions.length} action(s).`,
+    action_suggested: actionList,
+    explanation: payload.safety_reason ? `${reasonList}\nSafety note: ${payload.safety_reason}` : reasonList,
+    safety_checked: true,
+    allowed_to_execute: payload.safety_passed,
+  }
+}
+
+function mapDecisionLogToRow(log: AIDecisionApiRow): DecisionRow {
+  let parsed: Record<string, unknown> = {}
+  try {
+    const obj = JSON.parse(log.output_json)
+    if (obj && typeof obj === 'object') parsed = obj as Record<string, unknown>
+  } catch {
+    parsed = {}
+  }
+
+  const parsedActions = Array.isArray(parsed.actions) ? parsed.actions : []
+  const actionFromList = parsedActions
+    .map((a) => {
+      if (!a || typeof a !== 'object') return ''
+      const item = a as Record<string, unknown>
+      return `${String(item.target_device ?? 'unknown')}_${String(item.action ?? 'unknown')}`
+    })
+    .filter(Boolean)
+    .join(', ')
+
+  const reasonFromList = parsedActions
+    .map((a) => {
+      if (!a || typeof a !== 'object') return ''
+      const item = a as Record<string, unknown>
+      return item.reason ? `- ${String(item.reason)}` : ''
+    })
+    .filter(Boolean)
+    .join('\n')
+
+  const recommendation =
+    typeof parsed.recommendation === 'string'
+      ? parsed.recommendation
+      : typeof parsed.display_name === 'string'
+        ? `${parsed.display_name}`
+        : `Step: ${log.step}`
+  const action_suggested = typeof parsed.action_suggested === 'string' ? parsed.action_suggested : actionFromList || 'none'
+  const explanation =
+    typeof parsed.explanation === 'string'
+      ? parsed.explanation
+      : reasonFromList || log.safety_reason || log.execution_note || 'No details.'
+  const allowed_to_execute =
+    typeof parsed.allowed_to_execute === 'boolean'
+      ? parsed.allowed_to_execute
+      : typeof parsed.safety_passed === 'boolean'
+        ? parsed.safety_passed
+        : log.safety_passed
+
+  return {
+    id: log.id,
+    created_at: log.created_at,
+    recommendation,
+    action_suggested,
+    allowed_to_execute,
+    explanation,
+  }
+}
+
 export default function AIPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [selectedPlant, setSelectedPlant] = useState('')
@@ -159,21 +261,25 @@ export default function AIPage() {
 
   useEffect(() => {
     let alive = true
+
     const loadHistory = async () => {
       try {
-        const res = await axios.get<DecisionRow[]>(`${API_BASE_URL}/logs/ai-decisions?limit=10`)
+        const res = await axios.get<AIDecisionApiRow[]>(`${API_BASE_URL}/ai/decisions?limit=10`)
         if (!alive) return
-        setHistory(res.data)
+        const mapped = res.data.map(mapDecisionLogToRow)
+        setHistory(mapped)
       } catch {
         if (!alive) return
         setHistory([])
       }
     }
     void loadHistory()
+    const t = window.setInterval(() => void loadHistory(), 6000)
     return () => {
       alive = false
+      window.clearInterval(t)
     }
-  }, [recommendation])
+  }, [])
 
   const onFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     setSelectedFile(event.target.files?.[0] ?? null)
@@ -191,15 +297,21 @@ export default function AIPage() {
     try {
       const fd = new FormData()
       fd.append('file', selectedFile)
-      const res = await axios.post<ClassifyResponse>(`${API_BASE_URL}/ai/classify-plant`, fd, {
+      const res = await axios.post<ClassifyResponse>(`${API_BASE_URL}/ai/classify/image`, fd, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
       setClassification(res.data)
-      setSelectedPlant(res.data.predicted_plant)
+      setSelectedPlant(res.data.plant_key)
       setFallbackUsed(false)
     } catch (err) {
       const plant = PLANT_OPTIONS[0]
-      setClassification({ predicted_plant: plant, plant_group: groupByPlant[plant], confidence: 0.55 })
+      setClassification({
+        plant_key: plant,
+        display_name: plant,
+        predicted_class: plant,
+        plant_group: groupByPlant[plant],
+        confidence: 0.55,
+      })
       setSelectedPlant(plant)
       setFallbackUsed(true)
       if (!endpointMissing(err)) setInfo('Classify failed, fallback plant is used')
@@ -210,7 +322,13 @@ export default function AIPage() {
 
   const onSelectPlant = (plant: string) => {
     setSelectedPlant(plant)
-    setClassification({ predicted_plant: plant, plant_group: groupByPlant[plant], confidence: 1 })
+    setClassification({
+      plant_key: plant,
+      display_name: plant,
+      predicted_class: plant,
+      plant_group: groupByPlant[plant],
+      confidence: 1,
+    })
     setFallbackUsed(true)
   }
 
@@ -234,22 +352,34 @@ export default function AIPage() {
   }
 
   const onRecommend = async () => {
-    if (!profile || !latestSensor) {
-      setError('Please load profile first')
+    if (!latestSensor) {
+      setError('Sensor data is not ready yet')
+      return
+    }
+    if (mode !== 'ai') {
+      setError('Please switch system mode to AI before generating AI recommendation')
+      setInfo('AI recommend API is only used when mode=AI')
+      return
+    }
+    const plantKey = classification?.plant_key || selectedPlant
+    if (!plantKey) {
+      setError('Please classify image (or select plant) first')
       return
     }
     setLoading(true)
     setError(null)
     try {
-      const res = await axios.post<RecommendResponse>(`${API_BASE_URL}/ai/recommend`, {
-        plant_name: profile.plant_name,
-        sensor_snapshot: latestSensor,
+      const res = await axios.post<RecommendApiResponse>(`${API_BASE_URL}/ai/recommend`, {
+        plant_key: plantKey,
+        sensor: latestSensor,
+        device_id: 'web-ui',
       })
-      setRecommendation(res.data)
+      setRecommendation(mapRecommendToUi(res.data))
       setFallbackUsed(false)
-    } catch {
-      setRecommendation(recommendFallback(profile, latestSensor))
+    } catch (err) {
+      if (profile) setRecommendation(recommendFallback(profile, latestSensor))
       setFallbackUsed(true)
+      if (!endpointMissing(err)) setInfo('Recommend failed, fallback result is shown')
     } finally {
       setLoading(false)
     }
@@ -281,18 +411,18 @@ export default function AIPage() {
 
         <Card>
           <CardContent>
-            <Typography variant="h6" sx={{ mb: 1 }}>Image upload + plant selector</Typography>
+            <Typography variant="h6" sx={{ mb: 1 }}>Image upload</Typography>
             <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
               <Button variant="outlined" component="label" disabled={loading}>
                 Upload image
                 <input hidden type="file" accept="image/*" onChange={onFileChange} />
               </Button>
               <Button variant="contained" onClick={() => void onClassify()} disabled={loading || !selectedFile}>Classify plant</Button>
-              <TextField select label="Select plant manually" size="small" value={selectedPlant} onChange={(e) => onSelectPlant(e.target.value)} sx={{ minWidth: 220 }}>
+              {/* <TextField select label="Select plant manually" size="small" value={selectedPlant} onChange={(e) => onSelectPlant(e.target.value)} sx={{ minWidth: 220 }}>
                 {PLANT_OPTIONS.map((plant) => (
                   <MenuItem key={plant} value={plant}>{plant}</MenuItem>
                 ))}
-              </TextField>
+              </TextField> */}
             </Stack>
             <Typography color="text.secondary" sx={{ mt: 1 }}>Uploaded file: {selectedFile?.name ?? '--'}</Typography>
           </CardContent>
@@ -303,8 +433,9 @@ export default function AIPage() {
             <Typography variant="h6" sx={{ mb: 1 }}>Classification result</Typography>
             {classification ? (
               <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
-                <Typography>Plant: <b>{classification.predicted_plant}</b></Typography>
-                <Typography>Group: <b>{classification.plant_group}</b></Typography>
+                <Typography>Plant: <b>{classification.display_name}</b></Typography>
+                <Typography>Plant key: <b>{classification.plant_key}</b></Typography>
+                <Typography>Group: <b>{classification.plant_group ?? '--'}</b></Typography>
                 <Typography>Confidence: <b>{(classification.confidence * 100).toFixed(1)}%</b></Typography>
                 {lowConfidence ? <Chip color="warning" label="Low confidence - manual confirmation recommended" /> : <Chip color="success" label="Confidence OK" />}
               </Stack>
@@ -316,9 +447,13 @@ export default function AIPage() {
           <CardContent>
             <Typography variant="h6" sx={{ mb: 1 }}>Plant profile + recommendation</Typography>
             <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ mb: 2 }}>
-              <Button variant="contained" onClick={() => void onGetProfile()} disabled={loading || !selectedPlant}>Load profile</Button>
-              <Button variant="contained" color="secondary" onClick={() => void onRecommend()} disabled={loading || !profile}>Generate recommendation</Button>
+              {/* <Button variant="contained" onClick={() => void onGetProfile()} disabled={loading || !selectedPlant}>Load profile</Button> */}
+              {/* <Button variant="contained" color="secondary" onClick={() => void onRecommend()} disabled={loading || !profile}>Generate recommendation</Button> */}
+              <Button variant="outlined" color="secondary" onClick={() => void onRecommend()} disabled={loading}>Generate recommendation (manual)</Button>
             </Stack>
+            <Typography color="text.secondary" sx={{ mb: 1 }}>
+              In AI mode, backend auto-checks latest sensor data and auto-applies safe actions. This button is only for manual trigger.
+            </Typography>
 
             {profile ? (
               <Table size="small" sx={{ mb: 1 }}>
@@ -339,7 +474,7 @@ export default function AIPage() {
               <Stack spacing={1} sx={{ mt: 1 }}>
                 <Typography>Recommendation: <b>{recommendation.recommendation}</b></Typography>
                 <Typography>Action: <b>{recommendation.action_suggested}</b></Typography>
-                <Typography>Explanation: {recommendation.explanation}</Typography>
+                <Typography sx={{ whiteSpace: 'pre-wrap' }}>Explanation: {recommendation.explanation}</Typography>
                 <Chip color={recommendation.allowed_to_execute ? 'success' : 'warning'} label={recommendation.allowed_to_execute ? 'Safety: Allowed' : 'Safety: Blocked'} sx={{ width: 'fit-content' }} />
               </Stack>
             ) : null}
@@ -354,6 +489,7 @@ export default function AIPage() {
               <TableHead>
                 <TableRow>
                   <TableCell>Time</TableCell>
+                  <TableCell>Recommendation</TableCell>
                   <TableCell>Action</TableCell>
                   <TableCell>Status</TableCell>
                   <TableCell>Explanation</TableCell>
@@ -362,15 +498,16 @@ export default function AIPage() {
               <TableBody>
                 {history.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={4}>No AI decision logs yet.</TableCell>
+                    <TableCell colSpan={5}>No AI decision logs yet.</TableCell>
                   </TableRow>
                 ) : (
                   history.map((row) => (
                     <TableRow key={row.id}>
                       <TableCell>{new Date(row.created_at).toLocaleString()}</TableCell>
+                      <TableCell>{row.recommendation}</TableCell>
                       <TableCell>{row.action_suggested}</TableCell>
                       <TableCell>{row.allowed_to_execute ? 'Allowed' : 'Blocked'}</TableCell>
-                      <TableCell>{row.explanation}</TableCell>
+                      <TableCell sx={{ whiteSpace: 'pre-wrap' }}>{row.explanation}</TableCell>
                     </TableRow>
                   ))
                 )}
