@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.services.ai_mode_service import run_ai_if_needed
 from app.services.auto_mode_service import run_auto_if_needed
 from app.services.ingestion_service import ingest_payload, poll_latest_from_adafruit
 
@@ -38,6 +39,7 @@ class IngestionPoller:
                     try:
                         ingest_payload(db, payload, source="adafruit")
                         run_auto_if_needed(db, trigger="ingest")
+                        run_ai_if_needed(db, trigger="ingest")
                     finally:
                         db.close()
             except Exception as e:

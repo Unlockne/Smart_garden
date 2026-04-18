@@ -48,6 +48,7 @@ from app.services.ai_service import (
 )
 from app.services.plant_classifier_service import ml_runtime_status
 from app.services.auto_mode_service import run_auto_if_needed
+from app.services.ai_mode_service import run_ai_if_needed
 from app.services.device_state_service import get_latest_state, upsert_state
 from app.services.ingestion_service import ingest_payload
 from app.services.logging_service import create_control_log
@@ -169,6 +170,7 @@ def system_status(db: Session = Depends(get_db)):
 def internal_mock_ingest(req: SensorIngestRequest, db: Session = Depends(get_db)):
     row = ingest_payload(db, req, source="mock")
     run_auto_if_needed(db, trigger="mock-ingest")
+    run_ai_if_needed(db, trigger="mock-ingest")
     return {
         "status": "inserted",
         "id": row.id,
