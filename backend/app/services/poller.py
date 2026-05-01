@@ -5,8 +5,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.services.ai_mode_service import run_ai_if_needed
-from app.services.auto_mode_service import run_auto_if_needed
+from app.observers import sensor_publisher
+from app.observers.events import SensorReadingEvent
 from app.services.ingestion_service import ingest_payload, poll_latest_from_adafruit
 
 
@@ -37,9 +37,10 @@ class IngestionPoller:
                 if payload is not None:
                     db: Session = SessionLocal()
                     try:
-                        ingest_payload(db, payload, source="adafruit")
-                        run_auto_if_needed(db, trigger="ingest")
-                        run_ai_if_needed(db, trigger="ingest")
+                        row = ingest_payload(db, payload, source="adafruit")
+                        sensor_publisher.notify(
+                            SensorReadingEvent(db=db, trigger="ingest", sensor_id=row.id)
+                        )
                     finally:
                         db.close()
             except Exception as e:
