@@ -5,8 +5,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import SessionLocal
-from app.observers import sensor_publisher
 from app.observers.events import SensorReadingEvent
+from app.observers.publisher import sensor_publisher
 from app.services.ingestion_service import ingest_payload, poll_latest_from_adafruit
 
 
