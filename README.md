@@ -150,3 +150,51 @@ Smart_gardent/
       layouts/
       pages/
 ```
+
+
+## Git Workflow
+
+1. **Create a new branch**
+   Always branch off from the latest version of `main`.
+
+   ```bash
+   git checkout main
+   git pull origin main
+   git checkout -b feature/your-feature-name
+   ```
+
+2. **Work on your feature**
+   Make your code changes and commit them using the [Conventional Commits](https://www.conventionalcommits.org/) format:
+
+   ```bash
+   git add .
+   git commit -m "feat(auth): add login functionality"
+   ```
+
+3. **Rebase with the latest main branch**
+   Before pushing, make sure your branch is up to date with `main`:
+
+   ```bash
+   git fetch origin
+   git rebase origin/main
+   ```
+
+4. **Push your branch to remote**
+
+   ```bash
+   git push origin feature/your-feature-name
+   ```
+
+5. **Create a Pull Request (PR)**
+   Open a PR to merge your branch into `main` using the project’s PR template.
+   Wait for review and approval before merging.
+
+6. **After Merge — Sync and Clean Up**
+   Once your PR is merged:
+
+   ```bash
+   git checkout main
+   git pull origin main
+   git branch -d feature/your-feature-name     # delete local branch
+   git push origin --delete feature/your-feature-name   # delete remote branch
+   ```
