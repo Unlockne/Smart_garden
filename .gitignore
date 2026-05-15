@@ -56,3 +56,7 @@ Thumbs.db
 
 # Local tools
 *.local
+
+# ignore datasets
+ml/datasets/**/*
+!ml/datasets/**/.gitkeep
