@@ -1,20 +1,14 @@
 from datetime import datetime, timezone
- 
-from fastapi import Depends
-from fastapi import FastAPI
-from fastapi import File
-from fastapi import Form
-from fastapi import HTTPException
-from fastapi import UploadFile
+
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import Base, engine, get_db
 from app.models.control_log import ControlLog
-from app.models.device_state import DeviceState
+from app.models.ai_decision_log import AIDecisionLog
 from app.models.sensor_reading import SensorReading
 from app.models.system_decision_log import SystemDecisionLog
 from app.models.ai_decision_log import AIDecisionLog
@@ -36,24 +30,15 @@ from app.schemas.devices import (
     SystemModeResponse,
 )
 from app.schemas.sensors import SensorIngestRequest, SensorLatestResponse, SystemStatusResponse
-from app.services.adafruit_command_service import build_command, publish_command
-from app.services.ai_service import (
-    classify_from_image_bytes,
-    create_ai_log,
-    ensure_ai_seed,
-    get_profile,
-    parse_profile_json,
-    recommend_actions,
-    safety_check,
-    sensor_to_snapshot,
-)
-from app.services.plant_classifier_service import ml_runtime_status
-from app.services.auto_mode_service import run_auto_if_needed
-from app.services.ai_mode_service import run_ai_if_needed
+from app.services.ai_service import ensure_ai_seed
+from app.observers import sensor_publisher, AutoModeObserver, AIModeObserver
+from app.observers.events import SensorReadingEvent
 from app.services.device_state_service import get_latest_state, upsert_state
 from app.services.ingestion_service import ingest_payload
-from app.services.logging_service import create_control_log
+from app.services.plant_classifier_service import ml_runtime_status
 from app.services.poller import poller
+from app.services.facades.device_facade import device_facade
+from app.services.facades.plant_care_facade import plant_facade
 
 
 app = FastAPI(title="Smart Garden API", version="0.1.0")
@@ -63,14 +48,13 @@ app.add_middleware(
     allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"]
+    allow_headers=["*"],
 )
 
 
 @app.on_event("startup")
 def on_startup():
     Base.metadata.create_all(bind=engine)
-    # Ensure there's an initial device state row
     db = next(get_db())
     try:
         if get_latest_state(db) is None:
@@ -78,6 +62,11 @@ def on_startup():
         ensure_ai_seed(db)
     finally:
         db.close()
+
+    # Đăng ký các observer vào publisher (Observer Pattern)
+    sensor_publisher.subscribe(AutoModeObserver())
+    sensor_publisher.subscribe(AIModeObserver())
+
     poller.start()
 
 
@@ -86,9 +75,12 @@ def on_shutdown():
     poller.stop()
 
 
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
+
 @app.get("/health")
 def health_check(db: Session = Depends(get_db)):
-    database = "disconnected"
     try:
         db.execute(text("SELECT 1"))
         database = "connected"
@@ -107,6 +99,10 @@ def health_check(db: Session = Depends(get_db)):
     }
 
 
+# ---------------------------------------------------------------------------
+# Sensors
+# ---------------------------------------------------------------------------
+
 @app.get("/api/v1/sensors/latest", response_model=SensorLatestResponse)
 def get_latest_sensor(db: Session = Depends(get_db)):
     row = db.query(SensorReading).order_by(SensorReading.recorded_at.desc()).first()
@@ -121,7 +117,6 @@ def get_latest_sensor(db: Session = Depends(get_db)):
             device_id=None,
             source="mock",
         )
-
     return SensorLatestResponse(
         recorded_at=row.recorded_at,
         air_temperature=row.air_temperature,
@@ -136,12 +131,7 @@ def get_latest_sensor(db: Session = Depends(get_db)):
 @app.get("/api/v1/sensors/history")
 def get_sensor_history(limit: int = 20, db: Session = Depends(get_db)):
     limit = max(1, min(200, limit))
-    rows = (
-        db.query(SensorReading)
-        .order_by(SensorReading.recorded_at.desc())
-        .limit(limit)
-        .all()
-    )
+    rows = db.query(SensorReading).order_by(SensorReading.recorded_at.desc()).limit(limit).all()
     return [
         {
             "recorded_at": r.recorded_at,
@@ -155,6 +145,10 @@ def get_sensor_history(limit: int = 20, db: Session = Depends(get_db)):
         for r in rows
     ]
 
+
+# ---------------------------------------------------------------------------
+# System
+# ---------------------------------------------------------------------------
 
 @app.get("/api/v1/system/status", response_model=SystemStatusResponse)
 def system_status(db: Session = Depends(get_db)):
@@ -170,93 +164,67 @@ def system_status(db: Session = Depends(get_db)):
 @app.post("/api/v1/internal/mock-ingest")
 def internal_mock_ingest(req: SensorIngestRequest, db: Session = Depends(get_db)):
     row = ingest_payload(db, req, source="mock")
-    run_auto_if_needed(db, trigger="mock-ingest")
-    run_ai_if_needed(db, trigger="mock-ingest")
-    return {
-        "status": "inserted",
-        "id": row.id,
-        "recorded_at": row.recorded_at,
-    }
+    sensor_publisher.notify(SensorReadingEvent(db=db, trigger="mock-ingest", sensor_id=row.id))
+    return {"status": "inserted", "id": row.id, "recorded_at": row.recorded_at}
 
 
-@app.get("/api/v1/devices/state", response_model=DeviceStateResponse)
+# ---------------------------------------------------------------------------
+# Devices  →  DeviceFacade
+# ---------------------------------------------------------------------------
+
+@app.get("/api/v1/devices/state")
 def get_device_state(db: Session = Depends(get_db)):
-    state = get_latest_state(db)
-    if state is None:
-        state = upsert_state(db, mode="manual")
-
-    return DeviceStateResponse(
-        recorded_at=state.recorded_at,
-        pump_state=state.pump_state,
-        fan_state=state.fan_state,
-        light_state=state.light_state,
-        mode=state.mode,
-    )
+    return device_facade.get_state(db)
 
 
-@app.post("/api/v1/system/mode", response_model=SystemModeResponse)
+@app.post("/api/v1/system/mode")
 def set_system_mode(req: SystemModeRequest, db: Session = Depends(get_db)):
-    upsert_state(db, mode=req.mode)
-    return SystemModeResponse(success=True, mode=req.mode)
+    return device_facade.set_mode(db, req)
 
 
-@app.post("/api/v1/devices/control", response_model=DeviceControlResponse)
+@app.post("/api/v1/devices/control")
 def control_device(req: DeviceControlRequest, db: Session = Depends(get_db)):
-    state = get_latest_state(db)
-    current_mode = state.mode if state else "manual"
-    if current_mode == "auto" and req.actor_type == "user":
-        log = create_control_log(
-            db,
-            target_device=req.target_device,
-            action=req.action,
-            actor_type=req.actor_type,
-            reason=req.reason,
-            status="failed",
-            note="manual control is disabled in auto mode",
-        )
-        return DeviceControlResponse(success=False, message="Manual control is disabled in auto mode", command_id=str(log.id))
+    return device_facade.control(db, req)
 
-    cmd = build_command(
-        target_device=req.target_device,
-        action=req.action,
-        mode=current_mode,
-        requested_by=req.actor_type,
-        reason=req.reason,
-    )
+
+# ---------------------------------------------------------------------------
+# AI  →  PlantCareFacade
+# ---------------------------------------------------------------------------
+
+@app.post("/api/v1/ai/classify/image")
+async def ai_classify_image(
+    file: UploadFile = File(...),
+    device_id: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    name = (file.filename or "").lower()
+    if not name.endswith((".png", ".jpg", ".jpeg", ".webp")):
+        raise HTTPException(status_code=400, detail="Định dạng file không được hỗ trợ (png, jpg, jpeg, webp)")
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="File ảnh rỗng")
 
     try:
-        publish_command(cmd)
-        status = "success"
-        note = None
-        message = "Command sent successfully"
-        ok = True
+        return plant_facade.classify(db, image_bytes=image_bytes, device_id=device_id, filename=file.filename)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
-        status = "failed"
-        note = str(e)
-        message = f"Failed to send command: {e}"
-        ok = False
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
-    log = create_control_log(
-        db,
-        target_device=req.target_device,
-        action=req.action,
-        actor_type=req.actor_type,
-        reason=req.reason,
-        status=status,
-        note=note,
-    )
 
-    # Assume success for Week 3 demo; update state even if publish failed only when ok
-    if ok:
-        if req.target_device == "pump":
-            upsert_state(db, pump_state=(req.action == "on"))
-        elif req.target_device == "fan":
-            upsert_state(db, fan_state=(req.action == "on"))
-        elif req.target_device == "light":
-            upsert_state(db, light_state=(req.action == "on"))
+@app.post("/api/v1/ai/recommend")
+def ai_recommend(req: AIRecommendRequest, db: Session = Depends(get_db)):
+    return plant_facade.recommend(db, req)
 
-    return DeviceControlResponse(success=ok, message=message, command_id=str(log.id))
 
+@app.post("/api/v1/ai/apply")
+def ai_apply(req: AIApplyRequest, db: Session = Depends(get_db)):
+    return plant_facade.apply(db, req)
+
+
+# ---------------------------------------------------------------------------
+# Logs
+# ---------------------------------------------------------------------------
 
 @app.get("/api/v1/logs/control")
 def get_control_logs(limit: int = 10, db: Session = Depends(get_db)):
@@ -280,9 +248,7 @@ def get_control_logs(limit: int = 10, db: Session = Depends(get_db)):
 @app.get("/api/v1/logs/system-decisions")
 def get_system_decision_logs(limit: int = 10, db: Session = Depends(get_db)):
     limit = max(1, min(200, limit))
-    rows = (
-        db.query(SystemDecisionLog).order_by(SystemDecisionLog.created_at.desc()).limit(limit).all()
-    )
+    rows = db.query(SystemDecisionLog).order_by(SystemDecisionLog.created_at.desc()).limit(limit).all()
     return [
         {
             "id": r.id,
