@@ -11,8 +11,24 @@ from app.models.control_log import ControlLog
 from app.models.ai_decision_log import AIDecisionLog
 from app.models.sensor_reading import SensorReading
 from app.models.system_decision_log import SystemDecisionLog
-from app.schemas.ai import AIApplyRequest, AIRecommendRequest
-from app.schemas.devices import DeviceControlRequest, SystemModeRequest
+from app.models.ai_decision_log import AIDecisionLog
+from app.models.plant_profile import PlantProfile
+from app.schemas.ai import (
+    AIApplyRequest,
+    AIApplyResponse,
+    AIClassifyResponse,
+    AIRecommendRequest, 
+    AIRecommendResponse,
+    PlantProfileResponse,
+    SensorSnapshot,
+)
+from app.schemas.devices import (
+    DeviceControlRequest,
+    DeviceControlResponse,
+    DeviceStateResponse,
+    SystemModeRequest,
+    SystemModeResponse,
+)
 from app.schemas.sensors import SensorIngestRequest, SensorLatestResponse, SystemStatusResponse
 from app.services.ai_service import ensure_ai_seed
 from app.observers import sensor_publisher, AutoModeObserver, AIModeObserver
@@ -246,6 +262,235 @@ def get_system_decision_logs(limit: int = 10, db: Session = Depends(get_db)):
         }
         for r in rows
     ]
+
+
+@app.post("/api/v1/ai/classify/image", response_model=AIClassifyResponse)
+async def ai_classify_image(
+    file: UploadFile = File(...),
+    device_id: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    name = (file.filename or "").lower()
+    if not name.endswith((".png", ".jpg", ".jpeg", ".webp")):
+        raise HTTPException(
+            status_code=400,
+            detail="Định dạng file không được hỗ trợ (png, jpg, jpeg, webp)",
+        )
+    image_bytes = await file.read()
+    if not image_bytes:
+        raise HTTPException(status_code=400, detail="File ảnh rỗng")
+
+    try:
+        out = classify_from_image_bytes(db, image_bytes=image_bytes, device_id=device_id)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    create_ai_log(
+        db,
+        device_id=device_id,
+        step="classify",
+        input_obj={"filename": file.filename, "device_id": device_id},
+        output_obj=out,
+        safety_passed=True,
+    )
+    return AIClassifyResponse(**out)
+
+
+@app.post("/api/v1/ai/recommend", response_model=AIRecommendResponse)
+def ai_recommend(req: AIRecommendRequest, db: Session = Depends(get_db)):
+    ensure_ai_seed(db)
+    state = get_latest_state(db)
+    current_mode = state.mode if state else "manual"
+    if current_mode != "ai":
+        row = get_profile(db, plant_key=req.plant_key)
+        out = {
+            "plant_key": req.plant_key,
+            "display_name": row.display_name if row else "Unknown",
+            "sensor_used": SensorSnapshot().model_dump(),
+            "actions": [],
+            "safety_passed": False,
+            "safety_reason": "AI recommend requires system mode=ai",
+        }
+        create_ai_log(
+            db,
+            device_id=req.device_id,
+            step="recommend",
+            input_obj=req.model_dump(),
+            output_obj=out,
+            safety_passed=False,
+            safety_reason="not in ai mode",
+        )
+        return AIRecommendResponse(**out)
+
+    row = get_profile(db, plant_key=req.plant_key)
+    if row is None:
+        out = {
+            "plant_key": req.plant_key,
+            "display_name": "Unknown",
+            "sensor_used": SensorSnapshot().model_dump(),
+            "actions": [],
+            "safety_passed": False,
+            "safety_reason": "unknown plant_key",
+        }
+        create_ai_log(
+            db,
+            device_id=req.device_id,
+            step="recommend",
+            input_obj=req.model_dump(),
+            output_obj=out,
+            safety_passed=False,
+            safety_reason="unknown plant_key",
+        )
+        return AIRecommendResponse(**out)
+
+    profile = parse_profile_json(row)
+
+    if req.sensor is not None:
+        sensor_used = req.sensor.model_dump()
+    else:
+        latest = db.query(SensorReading).order_by(SensorReading.recorded_at.desc()).first()
+        sensor_used = sensor_to_snapshot(latest) if latest else SensorSnapshot().model_dump()
+
+    actions = recommend_actions(profile=profile, sensor=sensor_used)
+    ok, reason = safety_check(profile=profile, sensor=sensor_used, actions=actions)
+
+    out = {
+        "plant_key": row.plant_key,
+        "display_name": row.display_name,
+        "sensor_used": sensor_used,
+        "actions": actions,
+        "safety_passed": ok,
+        "safety_reason": reason,
+    }
+    create_ai_log(
+        db,
+        device_id=req.device_id,
+        step="recommend",
+        input_obj=req.model_dump(),
+        output_obj=out,
+        safety_passed=ok,
+        safety_reason=reason,
+    )
+    return AIRecommendResponse(**out)
+
+
+@app.get("/api/v1/ai/profile/{plant_key}", response_model=PlantProfileResponse)
+def ai_profile(plant_key: str, db: Session = Depends(get_db)):
+    ensure_ai_seed(db)
+    row = get_profile(db, plant_key=plant_key)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Plant profile not found: {plant_key}")
+    profile = parse_profile_json(row)
+    return PlantProfileResponse(
+        plant_key=row.plant_key,
+        display_name=row.display_name,
+        profile=profile,
+    )
+
+
+@app.post("/api/v1/ai/apply", response_model=AIApplyResponse)
+def ai_apply(req: AIApplyRequest, db: Session = Depends(get_db)):
+    state = get_latest_state(db)
+    current_mode = state.mode if state else "manual"
+    if current_mode != "ai":
+        out = {"success": False, "message": "AI apply is only allowed in ai mode", "command_ids": []}
+        create_ai_log(
+            db,
+            device_id=req.device_id,
+            step="apply",
+            input_obj=req.model_dump(),
+            output_obj=out,
+            safety_passed=False,
+            safety_reason="not in ai mode",
+            executed=False,
+            execution_note="blocked",
+        )
+        return AIApplyResponse(**out)
+
+    row = get_profile(db, plant_key=req.plant_key)
+    profile = parse_profile_json(row) if row else {}
+
+    # Safety gate again at apply time
+    latest = db.query(SensorReading).order_by(SensorReading.recorded_at.desc()).first()
+    sensor_used = sensor_to_snapshot(latest) if latest else {}
+    actions = [a.model_dump() for a in req.actions]
+    ok, reason = safety_check(profile=profile, sensor=sensor_used, actions=actions)
+    if not ok:
+        out = {"success": False, "message": f"Blocked by safety: {reason}", "command_ids": []}
+        create_ai_log(
+            db,
+            device_id=req.device_id,
+            step="apply",
+            input_obj=req.model_dump(),
+            output_obj=out,
+            safety_passed=False,
+            safety_reason=reason,
+            executed=False,
+            execution_note="blocked",
+        )
+        return AIApplyResponse(**out)
+
+    command_ids: list[str] = []
+    overall_ok = True
+    notes: list[str] = []
+    for a in actions:
+        cmd = build_command(
+            target_device=a["target_device"],
+            action=a["action"],
+            mode="ai",
+            requested_by="ai",
+            reason=req.reason,
+        )
+        try:
+            publish_command(cmd)
+            status = "success"
+            note = None
+            ok_cmd = True
+        except Exception as e:
+            status = "failed"
+            note = str(e)
+            ok_cmd = False
+            overall_ok = False
+            notes.append(note)
+
+        log = create_control_log(
+            db,
+            target_device=a["target_device"],
+            action=a["action"],
+            actor_type="ai",
+            reason=req.reason,
+            status=status,
+            note=note,
+        )
+        command_ids.append(str(log.id))
+
+        # Update state only when publish succeeded
+        if ok_cmd:
+            if a["target_device"] == "pump":
+                upsert_state(db, pump_state=(a["action"] == "on"))
+            elif a["target_device"] == "fan":
+                upsert_state(db, fan_state=(a["action"] == "on"))
+            elif a["target_device"] == "light":
+                upsert_state(db, light_state=(a["action"] == "on"))
+
+    out = {
+        "success": overall_ok,
+        "message": "Applied AI actions" if overall_ok else ("Applied with errors: " + "; ".join(notes)),
+        "command_ids": command_ids,
+    }
+    create_ai_log(
+        db,
+        device_id=req.device_id,
+        step="apply",
+        input_obj=req.model_dump(),
+        output_obj=out,
+        safety_passed=True,
+        executed=True,
+        execution_note="published" if overall_ok else "partial",
+    )
+    return AIApplyResponse(**out)
 
 
 @app.get("/api/v1/ai/decisions")

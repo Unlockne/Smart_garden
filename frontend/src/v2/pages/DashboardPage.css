@@ -1,0 +1,11 @@
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(76,175,80,0.2); }
+  50%       { box-shadow: 0 0 0 5px rgba(76,175,80,0.35); }
+}
+.tooltip-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #4caf50;
+  animation: pulse 2s infinite;
+  flex-shrink: 0;
+  display: inline-block;
+}
