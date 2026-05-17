@@ -49,6 +49,20 @@ export type ClassifyResponse = {
   confidence: number
 }
 
+export type PlantProfileRaw = {
+  plant_key: string
+  display_name: string
+  profile: {
+    soil_moisture_min?: number
+    soil_moisture_max?: number
+    temp_min?: number
+    temp_max?: number
+    light_min?: number
+    light_max?: number
+    notes?: string
+  }
+}
+
 export type PlantProfile = {
   plant_name: string
   plant_group: string
@@ -119,8 +133,20 @@ export const aiApi = {
   },
   profile: (plantKey: string) =>
     apiClient
-      .get<PlantProfile>(`/ai/profile/${encodeURIComponent(plantKey)}`)
-      .then((r) => r.data),
+      .get<PlantProfileRaw>(`/ai/profile/${encodeURIComponent(plantKey)}`)
+      .then((r) => {
+        const p = r.data.profile
+        return {
+          plant_name: r.data.display_name,
+          plant_group: 'unknown',
+          soil_threshold_min: p.soil_moisture_min ?? 30,
+          soil_threshold_target: p.soil_moisture_max ?? 60,
+          temp_threshold_max: p.temp_max ?? 35,
+          light_threshold_min: p.light_min ?? 200,
+          watering_duration_sec: 6,
+          care_summary: p.notes ?? '',
+        } as PlantProfile
+      }),
   recommend: (plant_key: string, sensor: SensorLatest, device_id = 'web-ui') =>
     apiClient
       .post<RecommendApiResponse>('/ai/recommend', { plant_key, sensor, device_id })

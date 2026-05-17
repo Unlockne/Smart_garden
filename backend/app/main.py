@@ -25,6 +25,7 @@ from app.schemas.ai import (
     AIClassifyResponse,
     AIRecommendRequest, 
     AIRecommendResponse,
+    PlantProfileResponse,
     SensorSnapshot,
 )
 from app.schemas.devices import (
@@ -407,6 +408,20 @@ def ai_recommend(req: AIRecommendRequest, db: Session = Depends(get_db)):
         safety_reason=reason,
     )
     return AIRecommendResponse(**out)
+
+
+@app.get("/api/v1/ai/profile/{plant_key}", response_model=PlantProfileResponse)
+def ai_profile(plant_key: str, db: Session = Depends(get_db)):
+    ensure_ai_seed(db)
+    row = get_profile(db, plant_key=plant_key)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Plant profile not found: {plant_key}")
+    profile = parse_profile_json(row)
+    return PlantProfileResponse(
+        plant_key=row.plant_key,
+        display_name=row.display_name,
+        profile=profile,
+    )
 
 
 @app.post("/api/v1/ai/apply", response_model=AIApplyResponse)

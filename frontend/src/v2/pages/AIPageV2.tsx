@@ -51,11 +51,9 @@ type DecisionRow = {
 }
 
 const PROFILE_FALLBACK: Record<string, PlantProfile> = {
-  Cactus: { plant_name: 'Cactus', plant_group: 'succulent', soil_threshold_min: 20, soil_threshold_target: 35, temp_threshold_max: 34, light_threshold_min: 500, watering_duration_sec: 5, care_summary: 'Needs dry soil and strong light' },
-  Mint: { plant_name: 'Mint', plant_group: 'herb', soil_threshold_min: 40, soil_threshold_target: 55, temp_threshold_max: 32, light_threshold_min: 350, watering_duration_sec: 6, care_summary: 'Prefers moderate moisture and bright indirect light' },
-  Monstera: { plant_name: 'Monstera', plant_group: 'leafy ornamental', soil_threshold_min: 35, soil_threshold_target: 50, temp_threshold_max: 33, light_threshold_min: 300, watering_duration_sec: 6, care_summary: 'Prefers medium moisture and filtered light' },
-  'Peace Lily': { plant_name: 'Peace Lily', plant_group: 'moisture-loving', soil_threshold_min: 45, soil_threshold_target: 60, temp_threshold_max: 31, light_threshold_min: 260, watering_duration_sec: 7, care_summary: 'Needs higher soil moisture and low-to-medium light' },
-  Rose: { plant_name: 'Rose', plant_group: 'flowering', soil_threshold_min: 38, soil_threshold_target: 52, temp_threshold_max: 33, light_threshold_min: 450, watering_duration_sec: 6, care_summary: 'Requires bright light and balanced soil moisture' },
+  FloweringPlant: { plant_name: 'Cây ra hoa (FloweringPlant)', plant_group: 'flowering', soil_threshold_min: 40, soil_threshold_target: 75, temp_threshold_max: 32, light_threshold_min: 150, watering_duration_sec: 6, care_summary: 'Needs balanced moisture and bright light for flowering.' },
+  LeafyPlant: { plant_name: 'Cây lá (LeafyPlant)', plant_group: 'leafy_ornamental', soil_threshold_min: 45, soil_threshold_target: 80, temp_threshold_max: 30, light_threshold_min: 100, watering_duration_sec: 6, care_summary: 'Prefers higher moisture and moderate filtered light.' },
+  Succulents: { plant_name: 'Cây mọng nước (Succulents)', plant_group: 'succulent', soil_threshold_min: 15, soil_threshold_target: 50, temp_threshold_max: 35, light_threshold_min: 250, watering_duration_sec: 5, care_summary: 'Needs dry soil and strong direct light.' },
 }
 
 function endpointMissing(err: unknown) {
@@ -237,7 +235,7 @@ export default function AIPageV2() {
         setProfile(PROFILE_FALLBACK[data.plant_key] ?? null)
       }
     } catch (err) {
-      const fallbackKey = 'Cactus'
+      const fallbackKey = 'FloweringPlant'
       setClassification({
         plant_key: fallbackKey,
         display_name: fallbackKey,
