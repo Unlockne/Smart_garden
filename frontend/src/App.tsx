@@ -6,6 +6,7 @@ import DashboardPage from './pages/DashboardPage'
 import ControlPage from './pages/ControlPage'
 import HistoryPage from './pages/HistoryPage'
 import AIPage from './pages/AIPage'
+import AnalyticsPage from './pages/AnalyticsPage'
 
 import V2Shell from './v2/V2Shell'
 import DashboardPageV2 from './v2/pages/DashboardPageV2'
@@ -31,6 +32,8 @@ export default function App() {
           <Route path="history" element={<HistoryPageV2 />} />
           <Route path="ai" element={<AIPageV2 />} />
         </Route>
+        
+        <Route path="/analytics" element={<AnalyticsPage />} />
       </Routes>
     </>
   )
